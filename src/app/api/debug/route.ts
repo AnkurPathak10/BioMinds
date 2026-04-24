@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getOpenAI } from "@/lib/ai";
+import { getGroq } from "@/lib/ai";
 import { PROMPTS } from "@/lib/prompts";
 
 export async function POST(req: NextRequest) {
@@ -14,7 +14,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Build the message content array with images + text
+    const groq = getGroq();
+
+    // Build message content — Groq vision model supports images
     const contentParts: Array<
       | { type: "text"; text: string }
       | { type: "image_url"; image_url: { url: string } }
@@ -41,11 +43,14 @@ export async function POST(req: NextRequest) {
 
 **Protocol used:** ${protocol || "Not specified"}
 
-Please analyze the image(s) and provide your diagnosis as a JSON object with a "diagnoses" array.`,
+Please analyze and provide your diagnosis as a JSON object with a "diagnoses" array. Each diagnosis should have: "title", "probability" (string like "High"), "explanation", "suggestedFix", and "possibleCauses" (array of strings).`,
     });
 
-    const completion = await getOpenAI().chat.completions.create({
-      model: "gpt-4o",
+    const completion = await groq.chat.completions.create({
+      model:
+        imageUrls && imageUrls.length > 0
+          ? "llama-3.2-90b-vision-preview"
+          : "llama-3.3-70b-versatile",
       response_format: { type: "json_object" },
       max_tokens: 2000,
       messages: [
@@ -54,15 +59,15 @@ Please analyze the image(s) and provide your diagnosis as a JSON object with a "
       ],
     });
 
-    const result = JSON.parse(
-      completion.choices[0].message.content || '{"diagnoses":[]}'
-    );
+    const text = completion.choices[0].message.content || '{"diagnoses":[]}';
+    const result = JSON.parse(text);
 
     return NextResponse.json(result);
   } catch (error) {
-    console.error("Debug error:", error);
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("Debug error:", message);
     return NextResponse.json(
-      { error: "Failed to analyze experiment" },
+      { error: `Failed to analyze experiment: ${message}` },
       { status: 500 }
     );
   }

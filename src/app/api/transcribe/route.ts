@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { transcribeAudio, getOpenAI } from "@/lib/ai";
-import { PROMPTS } from "@/lib/prompts";
+import { transcribeAudio, structureNotebookEntry } from "@/lib/ai";
 
 export async function POST(req: NextRequest) {
   try {
@@ -14,34 +13,21 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Step 1: Transcribe with Whisper
+    // Step 1: Transcribe with Groq Whisper (blazing fast)
     const rawText = await transcribeAudio(audioFile);
 
-    // Step 2: Structure with GPT-4o
-    const completion = await getOpenAI().chat.completions.create({
-      model: "gpt-4o",
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: PROMPTS.structureNotebookEntry },
-        {
-          role: "user",
-          content: `Here is the raw voice transcription from a lab researcher:\n\n"${rawText}"\n\nPlease structure this into a proper lab notebook entry. Return as JSON.`,
-        },
-      ],
-    });
-
-    const structured = JSON.parse(
-      completion.choices[0].message.content || "{}"
-    );
+    // Step 2: Structure with Groq Llama 3.3
+    const structured = await structureNotebookEntry(rawText);
 
     return NextResponse.json({
       rawText,
       structured,
     });
   } catch (error) {
-    console.error("Transcription error:", error);
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("Transcription error:", message);
     return NextResponse.json(
-      { error: "Failed to process audio" },
+      { error: `Failed to process audio: ${message}` },
       { status: 500 }
     );
   }

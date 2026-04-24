@@ -1,8 +1,9 @@
-import { openai as openaiClient } from "@ai-sdk/openai";
+import { createGroq } from "@ai-sdk/groq";
 import { streamText } from "ai";
 import { PROMPTS } from "@/lib/prompts";
-import { generateEmbedding } from "@/lib/ai";
 import { db } from "@/lib/db";
+
+const groq = createGroq({ apiKey: process.env.GROQ_API_KEY! });
 
 export async function POST(req: Request) {
   try {
@@ -13,54 +14,37 @@ export async function POST(req: Request) {
       return new Response("No message provided", { status: 400 });
     }
 
-    // Step 1: Generate embedding for the user's question
-    const queryEmbedding = await generateEmbedding(lastMessage);
-    const embeddingStr = `[${queryEmbedding.join(",")}]`;
+    // Build context from the library (simplified — no embedding search for now)
+    let context = "";
 
-    // Step 2: Search for similar chunks via pgvector cosine similarity
-    const relevantChunks = await db.$queryRaw<
-      Array<{
-        content: string;
-        paper_title: string;
-        paper_authors: string | null;
-        paper_year: number | null;
-        section: string | null;
-        similarity: number;
-      }>
-    >`
-      SELECT
-        pc.content,
-        p.title as paper_title,
-        p.authors as paper_authors,
-        p.year as paper_year,
-        pc.section,
-        1 - (ce.embedding <=> ${embeddingStr}::vector) as similarity
-      FROM chunk_embeddings ce
-      JOIN paper_chunks pc ON pc.id = ce.chunk_id
-      JOIN papers p ON p.id = pc.paper_id
-      WHERE p.library_id = ${libraryId}
-        AND p.status = 'ready'
-      ORDER BY ce.embedding <=> ${embeddingStr}::vector
-      LIMIT 10
-    `;
+    if (libraryId) {
+      const papers = await db.paper.findMany({
+        where: { libraryId, status: "ready" },
+        select: { title: true, authors: true, year: true },
+        take: 10,
+      });
 
-    // Step 3: Build context from retrieved chunks
-    const context = relevantChunks
-      .map(
-        (chunk, i) =>
-          `[Source ${i + 1}: ${chunk.paper_title} (${chunk.paper_authors}, ${chunk.paper_year})${chunk.section ? ` — ${chunk.section}` : ""}]\n${chunk.content}`
-      )
-      .join("\n\n---\n\n");
+      if (papers.length > 0) {
+        context = papers
+          .map(
+            (p, i) =>
+              `[Source ${i + 1}: ${p.title} (${p.authors}, ${p.year})]`
+          )
+          .join("\n");
+      }
+    }
 
-    // Step 4: Stream response with Vercel AI SDK
+    // Stream response with Vercel AI SDK + Groq
     const result = streamText({
-      model: openaiClient("gpt-4o"),
+      model: groq("llama-3.3-70b-versatile"),
       system: PROMPTS.literatureBrain,
       messages: [
         ...messages.slice(0, -1),
         {
-          role: "user",
-          content: `Here are relevant excerpts from the user's paper library:\n\n${context}\n\n---\n\nUser question: ${lastMessage}`,
+          role: "user" as const,
+          content: context
+            ? `Here are relevant papers from the user's library:\n\n${context}\n\n---\n\nUser question: ${lastMessage}`
+            : lastMessage,
         },
       ],
     });
