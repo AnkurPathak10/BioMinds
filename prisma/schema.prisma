@@ -1,0 +1,206 @@
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  extensions = [vector]
+}
+
+// ── Users (synced from Clerk via webhook) ──
+model User {
+  id          String   @id @default(cuid())
+  clerkId     String   @unique @map("clerk_id")
+  email       String   @unique
+  name        String?
+  imageUrl    String?  @map("image_url")
+  role        String   @default("student") // student, researcher, pi, technician
+  institution String?
+  plan        String   @default("free") // free, lab, enterprise
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  notebooks     Notebook[]
+  experiments   Experiment[]
+  paperLibraries PaperLibrary[]
+  debugSessions DebugSession[]
+
+  @@map("users")
+}
+
+// ── Lab Notebooks ──
+model Notebook {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  title       String
+  description String?
+  emoji       String   @default("🧪")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entries Entry[]
+
+  @@index([userId])
+  @@map("notebooks")
+}
+
+// ── Notebook Entries ──
+model Entry {
+  id             String   @id @default(cuid())
+  notebookId     String   @map("notebook_id")
+  title          String
+  hypothesis     String?
+  materials      Json?    // array of materials used
+  procedure      String?
+  observations   String?
+  results        String?
+  conclusion     String?
+  rawVoiceText   String?  @map("raw_voice_text")
+  source         String   @default("typed") // voice, typed, template
+  tags           String[] @default([])
+  experimentDate DateTime? @map("experiment_date")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  notebook   Notebook         @relation(fields: [notebookId], references: [id], onDelete: Cascade)
+  embeddings EntryEmbedding[]
+
+  @@index([notebookId])
+  @@map("entries")
+}
+
+// ── Entry Embeddings (for semantic search) ──
+model EntryEmbedding {
+  id        String                    @id @default(cuid())
+  entryId   String                    @map("entry_id")
+  content   String
+  embedding Unsupported("vector(1536)")
+
+  entry Entry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@index([entryId])
+  @@map("entry_embeddings")
+}
+
+// ── Paper Libraries ──
+model PaperLibrary {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  papers Paper[]
+
+  @@index([userId])
+  @@map("paper_libraries")
+}
+
+// ── Papers ──
+model Paper {
+  id         String   @id @default(cuid())
+  libraryId  String   @map("library_id")
+  title      String
+  authors    String?
+  abstract   String?
+  journal    String?
+  year       Int?
+  doi        String?
+  fileUrl    String   @map("file_url")
+  fileKey    String   @map("file_key")
+  status     String   @default("processing") // processing, ready, failed
+  chunkCount Int      @default(0) @map("chunk_count")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  library PaperLibrary @relation(fields: [libraryId], references: [id], onDelete: Cascade)
+  chunks  PaperChunk[]
+
+  @@index([libraryId])
+  @@map("papers")
+}
+
+// ── Paper Chunks ──
+model PaperChunk {
+  id         String  @id @default(cuid())
+  paperId    String  @map("paper_id")
+  chunkIndex Int     @map("chunk_index")
+  content    String
+  section    String? // intro, methods, results, discussion
+  pageNumber Int?    @map("page_number")
+
+  paper      Paper            @relation(fields: [paperId], references: [id], onDelete: Cascade)
+  embeddings ChunkEmbedding[]
+
+  @@index([paperId])
+  @@map("paper_chunks")
+}
+
+// ── Chunk Embeddings (for Literature Brain RAG) ──
+model ChunkEmbedding {
+  id        String                    @id @default(cuid())
+  chunkId   String                    @map("chunk_id")
+  embedding Unsupported("vector(1536)")
+
+  chunk PaperChunk @relation(fields: [chunkId], references: [id], onDelete: Cascade)
+
+  @@index([chunkId])
+  @@map("chunk_embeddings")
+}
+
+// ── Experiments ──
+model Experiment {
+  id             String   @id @default(cuid())
+  userId         String   @map("user_id")
+  title          String
+  protocolUsed   String?  @map("protocol_used")
+  expectedResult String?  @map("expected_result")
+  actualResult   String?  @map("actual_result")
+  imageUrls      String[] @default([]) @map("image_urls")
+  parameters     Json?    // key-value experiment params
+  experimentDate DateTime? @map("experiment_date")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  debugSessions DebugSession[]
+
+  @@index([userId])
+  @@map("experiments")
+}
+
+// ── Debug Sessions ──
+model DebugSession {
+  id              String   @id @default(cuid())
+  experimentId    String?  @map("experiment_id")
+  userId          String   @map("user_id")
+  userDescription String   @map("user_description")
+  imageUrls       String[] @default([]) @map("image_urls")
+  imageAnalysis   Json?    @map("image_analysis") // GPT-4o vision output
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  experiment Experiment? @relation(fields: [experimentId], references: [id])
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  diagnoses  Diagnosis[]
+
+  @@index([userId])
+  @@map("debug_sessions")
+}
+
+// ── Diagnoses ──
+model Diagnosis {
+  id              String @id @default(cuid())
+  sessionId       String @map("session_id")
+  rank            Int    // 1 = most likely
+  probableCause   String @map("probable_cause")
+  explanation     String
+  suggestedFix    String @map("suggested_fix")
+  evidenceSource  String @map("evidence_source") // own_data, literature, community
+  confidenceScore Float  @map("confidence_score")
+
+  session DebugSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("diagnoses")
+}
