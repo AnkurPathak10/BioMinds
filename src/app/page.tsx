@@ -163,7 +163,7 @@ export default function LandingPage() {
                 description:
                   "Upload your failed gel, blot, or growth curve. AI analyzes like a senior scientist and gives ranked probable causes.",
                 features: [
-                  "Multi-modal image analysis (GPT-4o Vision)",
+                  "Multi-modal image analysis (DeepMinds AI)",
                   "Cross-references your past experiments",
                   "Ranked diagnoses with confidence scores",
                 ],
@@ -221,7 +221,7 @@ export default function LandingPage() {
                 step: "02",
                 title: "AI Processes",
                 description:
-                  "Our AI structures your notes, embeds your papers, and analyzes your images using GPT-4o.",
+                  "Our AI structures your notes, embeds your papers, and analyzes your images using DeepMinds AI.",
               },
               {
                 step: "03",

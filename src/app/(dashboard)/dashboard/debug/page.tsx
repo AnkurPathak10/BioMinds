@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
+import { toast } from "sonner";
 import {
   Bug,
   Upload,
@@ -12,8 +13,8 @@ import {
   FlaskConical,
   Loader2,
   X,
-  ArrowRight,
   TrendingDown,
+  RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,39 +24,13 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 
-// Demo diagnoses
-const demoDiagnoses = [
-  {
-    rank: 1,
-    probableCause: "Antibody Lot Variability",
-    explanation:
-      "The anti-p53 antibody lot #4521 (DO-1 clone) has shown inconsistent binding affinity in recent batches. Multiple labs have reported weak or absent signal with this lot when used at the standard 1:1000 dilution.",
-    suggestedFix:
-      "Try increasing antibody concentration to 1:500, or request a replacement lot from the supplier. Lot #4519 has been verified to work well.",
-    evidenceSource: "Community reports + Literature",
-    confidenceScore: 0.87,
-  },
-  {
-    rank: 2,
-    probableCause: "Transfer Buffer pH Drift",
-    explanation:
-      "Tris-Glycine transfer buffer pH may have drifted above 8.5 during extended transfer. This causes poor protein retention on PVDF membrane, especially for proteins >40kDa.",
-    suggestedFix:
-      "Freshly prepare transfer buffer and verify pH is 8.3 ± 0.1 before use. Consider wet transfer at 100V for 90min instead of semi-dry.",
-    evidenceSource: "Your past experiments",
-    confidenceScore: 0.65,
-  },
-  {
-    rank: 3,
-    probableCause: "Insufficient Blocking",
-    explanation:
-      "Your blocking step (3% BSA, 30min) may be insufficient for this antibody-membrane combination. DO-1 antibody is known to show high background with short blocking times.",
-    suggestedFix:
-      "Increase blocking time to 1 hour or switch to 5% non-fat milk. Add 0.1% Tween-20 to blocking solution.",
-    evidenceSource: "Literature",
-    confidenceScore: 0.42,
-  },
-];
+type Diagnosis = {
+  title: string;
+  probability: string;
+  explanation: string;
+  suggestedFix: string;
+  possibleCauses: string[];
+};
 
 export default function DebugPage() {
   const [images, setImages] = useState<string[]>([]);
@@ -63,13 +38,21 @@ export default function DebugPage() {
   const [expectedResult, setExpectedResult] = useState("");
   const [protocol, setProtocol] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [showResults, setShowResults] = useState(false);
+  const [diagnoses, setDiagnoses] = useState<Diagnosis[]>([]);
+  const [analysisSteps, setAnalysisSteps] = useState<string[]>([]);
+  const [errorMessage, setErrorMessage] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files) {
       Array.from(files).forEach((file) => {
+        if (file.size > 10 * 1024 * 1024) {
+          toast.error("File too large", {
+            description: `${file.name} exceeds 10MB limit.`,
+          });
+          return;
+        }
         const reader = new FileReader();
         reader.onload = (ev) => {
           setImages((prev) => [...prev, ev.target?.result as string]);
@@ -79,38 +62,169 @@ export default function DebugPage() {
     }
   };
 
-  const handleDiagnose = () => {
+  // ── Real AI diagnosis handler ──
+  const handleDiagnose = async () => {
+    if (!description.trim()) {
+      toast.error("Please describe what went wrong");
+      return;
+    }
+
     setIsAnalyzing(true);
-    setTimeout(() => {
+    setDiagnoses([]);
+    setErrorMessage("");
+    setAnalysisSteps([]);
+
+    // Animate analysis steps progressively
+    const steps = [
+      "Reading experiment details...",
+      "Analyzing uploaded images...",
+      "Cross-referencing protocols...",
+      "Generating diagnoses...",
+    ];
+
+    for (let i = 0; i < steps.length; i++) {
+      await new Promise((r) => setTimeout(r, 600));
+      setAnalysisSteps((prev) => [...prev, steps[i]]);
+    }
+
+    try {
+      const response = await fetch("/api/debug", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageUrls: images,
+          description: description.trim(),
+          expectedResult: expectedResult.trim(),
+          protocol: protocol.trim(),
+        }),
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(
+          errData.error || `Server error: ${response.status}`
+        );
+      }
+
+      const data = await response.json();
+
+      // Handle different response formats the AI might return
+      const rawArray: Record<string, unknown>[] =
+        data.diagnoses || data.diagnosis || data.results || [];
+
+      // Normalize each diagnosis — AI may use different field names
+      const diagnosisArray: Diagnosis[] = rawArray.map((d: Record<string, unknown>) => ({
+        title:
+          (d.title as string) ||
+          (d.cause as string) ||
+          (d.probableCause as string) ||
+          (d.name as string) ||
+          "Unknown Issue",
+        probability:
+          (d.probability as string) ||
+          (d.confidence as string) ||
+          (d.severity as string) ||
+          (d.likelihood as string) ||
+          "Medium",
+        explanation:
+          (d.explanation as string) ||
+          (d.description as string) ||
+          (d.details as string) ||
+          "",
+        suggestedFix:
+          (d.suggestedFix as string) ||
+          (d.suggested_fix as string) ||
+          (d.fix as string) ||
+          (d.solution as string) ||
+          (d.recommendation as string) ||
+          "",
+        possibleCauses: Array.isArray(d.possibleCauses)
+          ? (d.possibleCauses as string[])
+          : Array.isArray(d.possible_causes)
+          ? (d.possible_causes as string[])
+          : Array.isArray(d.causes)
+          ? (d.causes as string[])
+          : [],
+      }));
+
+      if (diagnosisArray.length === 0) {
+        throw new Error(
+          "AI could not generate diagnoses. Please provide more detail."
+        );
+      }
+
+      setDiagnoses(diagnosisArray);
+      toast.success("Diagnosis complete!", {
+        description: `Found ${diagnosisArray.length} probable cause${diagnosisArray.length > 1 ? "s" : ""}.`,
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      console.error("Debug error:", msg);
+      setErrorMessage(msg);
+      toast.error("Diagnosis failed", { description: msg });
+    } finally {
       setIsAnalyzing(false);
-      setShowResults(true);
-    }, 2500);
+    }
   };
 
-  const confidenceColor = (score: number) => {
-    if (score >= 0.7) return "text-red-500 dark:text-red-400";
-    if (score >= 0.5) return "text-orange-500 dark:text-orange-400";
+  // ── Reset everything ──
+  const handleReset = () => {
+    setImages([]);
+    setDescription("");
+    setExpectedResult("");
+    setProtocol("");
+    setDiagnoses([]);
+    setAnalysisSteps([]);
+    setErrorMessage("");
+  };
+
+  const probabilityColor = (prob: string | undefined) => {
+    const p = (prob || "medium").toLowerCase();
+    if (p === "high" || p === "very high")
+      return "text-red-500 dark:text-red-400";
+    if (p === "medium" || p === "moderate")
+      return "text-orange-500 dark:text-orange-400";
     return "text-yellow-500 dark:text-yellow-400";
   };
 
-  const confidenceBg = (score: number) => {
-    if (score >= 0.7) return "bg-red-500/10 border-red-500/20";
-    if (score >= 0.5) return "bg-orange-500/10 border-orange-500/20";
+  const probabilityBg = (prob: string | undefined) => {
+    const p = (prob || "medium").toLowerCase();
+    if (p === "high" || p === "very high")
+      return "bg-red-500/10 border-red-500/20";
+    if (p === "medium" || p === "moderate")
+      return "bg-orange-500/10 border-orange-500/20";
     return "bg-yellow-500/10 border-yellow-500/20";
   };
+
+  const rankColor = (rank: number) => {
+    if (rank === 1) return "bg-red-500/20 text-red-600 dark:text-red-400";
+    if (rank === 2)
+      return "bg-orange-500/20 text-orange-600 dark:text-orange-400";
+    return "bg-yellow-500/20 text-yellow-600 dark:text-yellow-400";
+  };
+
+  const hasResults = diagnoses.length > 0;
 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-          <Bug className="h-6 w-6 text-primary" />
-          Experiment Debugger
-        </h1>
-        <p className="mt-1 text-muted-foreground">
-          Upload failed results and get AI-powered diagnoses with ranked
-          probable causes.
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+            <Bug className="h-6 w-6 text-primary" />
+            Experiment Debugger
+          </h1>
+          <p className="mt-1 text-muted-foreground">
+            Upload failed results and get AI-powered diagnoses with ranked
+            probable causes.
+          </p>
+        </div>
+        {hasResults && (
+          <Button variant="outline" onClick={handleReset} className="gap-2">
+            <RotateCcw className="h-4 w-4" />
+            New Analysis
+          </Button>
+        )}
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -149,7 +263,10 @@ export default function DebugPage() {
               {images.length > 0 && (
                 <div className="flex flex-wrap gap-2">
                   {images.map((img, i) => (
-                    <div key={i} className="group relative h-20 w-20 overflow-hidden rounded-lg border">
+                    <div
+                      key={i}
+                      className="group relative h-20 w-20 overflow-hidden rounded-lg border"
+                    >
                       <img
                         src={img}
                         alt={`Upload ${i + 1}`}
@@ -182,9 +299,11 @@ export default function DebugPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label>What went wrong?</Label>
+                <Label>
+                  What went wrong? <span className="text-destructive">*</span>
+                </Label>
                 <Textarea
-                  placeholder="e.g., No bands visible on Western Blot for p53 in treated samples. Expected a clear band at 53kDa."
+                  placeholder="e.g., Extraction of pigment from spinach leaves using acetone gave a very pale green extract instead of deep green."
                   rows={3}
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
@@ -193,7 +312,7 @@ export default function DebugPage() {
               <div className="space-y-2">
                 <Label>Expected Result</Label>
                 <Input
-                  placeholder="e.g., Clear band at 53kDa, ~3-fold increase vs control"
+                  placeholder="e.g., Deep green extract with visible chlorophyll pigments"
                   value={expectedResult}
                   onChange={(e) => setExpectedResult(e.target.value)}
                 />
@@ -201,7 +320,7 @@ export default function DebugPage() {
               <div className="space-y-2">
                 <Label>Protocol Used (optional)</Label>
                 <Textarea
-                  placeholder="e.g., Standard Western Blot protocol - 10% SDS-PAGE, PVDF membrane, anti-p53 DO-1 1:1000..."
+                  placeholder="e.g., Grind spinach leaves in mortar with acetone, filter through cheesecloth..."
                   rows={3}
                   value={protocol}
                   onChange={(e) => setProtocol(e.target.value)}
@@ -212,12 +331,12 @@ export default function DebugPage() {
                 className="w-full gap-2"
                 size="lg"
                 onClick={handleDiagnose}
-                disabled={isAnalyzing}
+                disabled={isAnalyzing || !description.trim()}
               >
                 {isAnalyzing ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    Analyzing with GPT-4o Vision...
+                    Analyzing...
                   </>
                 ) : (
                   <>
@@ -232,7 +351,8 @@ export default function DebugPage() {
 
         {/* Right: Results */}
         <div className="space-y-4">
-          {!showResults && !isAnalyzing && (
+          {/* Empty state */}
+          {!hasResults && !isAnalyzing && !errorMessage && (
             <Card className="flex h-full items-center justify-center border-dashed">
               <CardContent className="py-16 text-center">
                 <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10 text-primary">
@@ -249,6 +369,7 @@ export default function DebugPage() {
             </Card>
           )}
 
+          {/* Analyzing state */}
           {isAnalyzing && (
             <Card className="flex h-full items-center justify-center">
               <CardContent className="py-16 text-center">
@@ -257,20 +378,16 @@ export default function DebugPage() {
                   AI is Analyzing...
                 </h3>
                 <p className="mt-2 max-w-xs text-sm text-muted-foreground">
-                  GPT-4o Vision is examining your images, cross-referencing your
-                  past experiments, and searching published literature.
+                  DeepMinds AI is examining your data, cross-referencing
+                  protocols, and generating diagnoses.
                 </p>
                 <div className="mt-6 space-y-2 text-left max-w-xs mx-auto">
-                  {[
-                    "Reading image data...",
-                    "Cross-referencing protocols...",
-                    "Searching literature...",
-                  ].map((step, i) => (
+                  {analysisSteps.map((step) => (
                     <div
                       key={step}
-                      className="flex items-center gap-2 text-sm text-muted-foreground"
+                      className="flex items-center gap-2 text-sm text-muted-foreground animate-in fade-in slide-in-from-left-2 duration-300"
                     >
-                      <CheckCircle2 className="h-4 w-4 text-primary" />
+                      <CheckCircle2 className="h-4 w-4 text-primary shrink-0" />
                       {step}
                     </div>
                   ))}
@@ -279,79 +396,110 @@ export default function DebugPage() {
             </Card>
           )}
 
-          {showResults && (
+          {/* Error state */}
+          {errorMessage && !isAnalyzing && (
+            <Card className="border-destructive/30 bg-destructive/5">
+              <CardContent className="py-8 text-center">
+                <AlertTriangle className="mx-auto h-10 w-10 text-destructive" />
+                <h3 className="mt-4 text-lg font-semibold">Analysis Failed</h3>
+                <p className="mt-2 max-w-sm text-sm text-muted-foreground mx-auto">
+                  {errorMessage}
+                </p>
+                <Button
+                  variant="outline"
+                  className="mt-4"
+                  onClick={() => {
+                    setErrorMessage("");
+                    handleDiagnose();
+                  }}
+                >
+                  Try Again
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Real AI Results */}
+          {hasResults && (
             <div className="space-y-4">
               <div className="flex items-center gap-2">
                 <AlertTriangle className="h-5 w-5 text-primary" />
-                <h2 className="text-lg font-semibold">
-                  Diagnosis Results
-                </h2>
+                <h2 className="text-lg font-semibold">Diagnosis Results</h2>
                 <Badge className="ml-auto">
-                  {demoDiagnoses.length} probable causes
+                  {diagnoses.length} probable cause
+                  {diagnoses.length > 1 ? "s" : ""}
                 </Badge>
               </div>
 
-              {demoDiagnoses.map((d) => (
-                <Card
-                  key={d.rank}
-                  className={`border ${confidenceBg(d.confidenceScore)} transition-all hover:shadow-md`}
-                >
-                  <CardContent className="py-5 space-y-3">
-                    {/* Header */}
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-center gap-3">
-                        <div
-                          className={`flex h-8 w-8 items-center justify-center rounded-full font-bold text-sm ${
-                            d.rank === 1
-                              ? "bg-red-500/20 text-red-600 dark:text-red-400"
-                              : d.rank === 2
-                              ? "bg-orange-500/20 text-orange-600 dark:text-orange-400"
-                              : "bg-yellow-500/20 text-yellow-600 dark:text-yellow-400"
-                          }`}
-                        >
-                          #{d.rank}
+              {diagnoses.map((d, index) => {
+                const rank = index + 1;
+                return (
+                  <Card
+                    key={index}
+                    className={`border ${probabilityBg(d.probability)} transition-all hover:shadow-md`}
+                  >
+                    <CardContent className="py-5 space-y-3">
+                      {/* Header */}
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-center gap-3">
+                          <div
+                            className={`flex h-8 w-8 items-center justify-center rounded-full font-bold text-sm ${rankColor(rank)}`}
+                          >
+                            #{rank}
+                          </div>
+                          <h3 className="font-semibold">{d.title}</h3>
                         </div>
-                        <h3 className="font-semibold">{d.probableCause}</h3>
+                        <div className="flex items-center gap-1.5 text-sm font-medium">
+                          <TrendingDown
+                            className={`h-4 w-4 ${probabilityColor(d.probability)}`}
+                          />
+                          <span className={probabilityColor(d.probability)}>
+                            {d.probability}
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-1.5 text-sm font-medium">
-                        <TrendingDown
-                          className={`h-4 w-4 ${confidenceColor(
-                            d.confidenceScore
-                          )}`}
-                        />
-                        <span className={confidenceColor(d.confidenceScore)}>
-                          {Math.round(d.confidenceScore * 100)}%
-                        </span>
-                      </div>
-                    </div>
 
-                    <Separator />
+                      <Separator />
 
-                    {/* Explanation */}
-                    <p className="text-sm text-muted-foreground leading-relaxed">
-                      {d.explanation}
-                    </p>
-
-                    {/* Fix */}
-                    <div className="rounded-lg bg-primary/5 p-3">
-                      <div className="flex items-center gap-1.5 text-sm font-medium text-primary">
-                        <Lightbulb className="h-3.5 w-3.5" />
-                        Suggested Fix
-                      </div>
-                      <p className="mt-1.5 text-sm text-muted-foreground">
-                        {d.suggestedFix}
+                      {/* Explanation */}
+                      <p className="text-sm text-muted-foreground leading-relaxed">
+                        {d.explanation}
                       </p>
-                    </div>
 
-                    {/* Source */}
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <Badge variant="outline" className="text-xs">
-                        {d.evidenceSource}
-                      </Badge>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+                      {/* Possible Causes */}
+                      {d.possibleCauses && d.possibleCauses.length > 0 && (
+                        <div className="space-y-1.5">
+                          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                            Contributing Factors
+                          </p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {d.possibleCauses.map((cause, i) => (
+                              <Badge
+                                key={i}
+                                variant="outline"
+                                className="text-xs"
+                              >
+                                {cause}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Fix */}
+                      <div className="rounded-lg bg-primary/5 p-3">
+                        <div className="flex items-center gap-1.5 text-sm font-medium text-primary">
+                          <Lightbulb className="h-3.5 w-3.5" />
+                          Suggested Fix
+                        </div>
+                        <p className="mt-1.5 text-sm text-muted-foreground">
+                          {d.suggestedFix}
+                        </p>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
             </div>
           )}
         </div>

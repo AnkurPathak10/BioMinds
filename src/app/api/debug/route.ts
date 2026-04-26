@@ -16,26 +16,8 @@ export async function POST(req: NextRequest) {
 
     const groq = getGroq();
 
-    // Build message content — Groq vision model supports images
-    const contentParts: Array<
-      | { type: "text"; text: string }
-      | { type: "image_url"; image_url: { url: string } }
-    > = [];
-
-    // Add images if provided
-    if (imageUrls && imageUrls.length > 0) {
-      for (const url of imageUrls) {
-        contentParts.push({
-          type: "image_url",
-          image_url: { url },
-        });
-      }
-    }
-
-    // Add text description
-    contentParts.push({
-      type: "text",
-      text: `## Failed Experiment Details
+    // Build the prompt text
+    const promptText = `## Failed Experiment Details
 
 **What went wrong:** ${description}
 
@@ -43,19 +25,17 @@ export async function POST(req: NextRequest) {
 
 **Protocol used:** ${protocol || "Not specified"}
 
-Please analyze and provide your diagnosis as a JSON object with a "diagnoses" array. Each diagnosis should have: "title", "probability" (string like "High"), "explanation", "suggestedFix", and "possibleCauses" (array of strings).`,
-    });
+${imageUrls && imageUrls.length > 0 ? `[${imageUrls.length} image(s) were uploaded by the researcher — analyze based on the description above]` : ""}
+
+Please analyze and provide your diagnosis as a JSON object with a "diagnoses" array. Each diagnosis should have: "title", "probability" (string like "High", "Medium", or "Low"), "explanation", "suggestedFix", and "possibleCauses" (array of strings).`;
 
     const completion = await groq.chat.completions.create({
-      model:
-        imageUrls && imageUrls.length > 0
-          ? "llama-3.2-90b-vision-preview"
-          : "llama-3.3-70b-versatile",
+      model: "llama-3.3-70b-versatile",
       response_format: { type: "json_object" },
       max_tokens: 2000,
       messages: [
         { role: "system", content: PROMPTS.experimentDebugger },
-        { role: "user", content: contentParts },
+        { role: "user", content: promptText },
       ],
     });
 
