@@ -1,8 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { extractText, getDocumentProxy } from "unpdf";
+import { db } from "@/lib/db";
+import { getDbUser, getDefaultLibrary } from "@/lib/auth";
 
 export async function POST(req: NextRequest) {
   try {
+    const user = await getDbUser();
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const library = await getDefaultLibrary(user.id);
+
     const formData = await req.formData();
     const pdfFile = formData.get("pdf") as File | null;
 
@@ -20,7 +29,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Parse PDF with unpdf (works in serverless/Turbopack)
+    // Parse PDF with unpdf
     const arrayBuffer = await pdfFile.arrayBuffer();
     const pdf = await getDocumentProxy(new Uint8Array(arrayBuffer));
     const { text: rawText, totalPages } = await extractText(pdf, {
@@ -58,16 +67,33 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({
-      title: extractedTitle,
-      fileName: pdfFile.name,
-      fileSize: pdfFile.size,
-      numPages: totalPages,
-      wordCount: words.length,
-      chunkCount: chunks.length,
-      chunks,
-      preview: text.substring(0, 500),
+    // Save paper to database
+    const paper = await db.paper.create({
+      data: {
+        libraryId: library.id,
+        title: extractedTitle,
+        fileName: pdfFile.name,
+        fileSize: pdfFile.size,
+        numPages: totalPages,
+        wordCount: words.length,
+        preview: text.substring(0, 500),
+        status: "ready",
+        chunkCount: chunks.length,
+        chunks: {
+          create: chunks.map((content, index) => ({
+            chunkIndex: index,
+            content,
+          })),
+        },
+      },
+      include: {
+        chunks: {
+          select: { id: true, content: true },
+        },
+      },
     });
+
+    return NextResponse.json({ paper }, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error("PDF upload error:", message);

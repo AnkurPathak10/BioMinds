@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import {
   Plus,
@@ -48,43 +48,7 @@ type NotebookEntry = {
   createdAt: string;
 };
 
-// Demo notebook entries for UI preview
-const initialEntries: NotebookEntry[] = [
-  {
-    id: "demo-1",
-    title: "CRISPR Cas9 Transfection - HEK293T",
-    source: "voice",
-    tags: ["CRISPR", "HEK293T", "Transfection"],
-    hypothesis:
-      "Lipofectamine 3000 will achieve >70% transfection efficiency in HEK293T cells at a 2:1 reagent:DNA ratio.",
-    materials: "Lipofectamine 3000, Cas9-GFP plasmid, HEK293T cells, 6-well plates, OptiMEM",
-    procedure:
-      "1. Seeded 2×10⁵ HEK293T cells in 6-well plate 24h prior\n2. Prepared Cas9-GFP plasmid at 2.5µg/well\n3. Mixed with Lipofectamine 3000 at 2:1 ratio\n4. Added complex to cells, incubated 48h at 37°C, 5% CO₂",
-    observations: "Cells appeared healthy at 24h. GFP fluorescence visible under microscope by 36h.",
-    results:
-      "GFP expression observed via fluorescence microscopy. Estimated ~65% efficiency based on GFP+ cells.",
-    conclusion: "Efficiency slightly below target. Will try 3:1 ratio next.",
-    experimentDate: "2026-04-22",
-    createdAt: "2 days ago",
-  },
-  {
-    id: "demo-2",
-    title: "Western Blot - p53 Expression",
-    source: "typed",
-    tags: ["Western Blot", "p53", "MCF-7"],
-    hypothesis:
-      "Doxorubicin treatment (1µM, 24h) will upregulate p53 protein expression in MCF-7 cells.",
-    materials: "Doxorubicin, MCF-7 cells, RIPA buffer, SDS-PAGE gel 10%, PVDF membrane, anti-p53 (DO-1), anti-β-actin",
-    procedure:
-      "1. Treated MCF-7 cells with 1µM doxorubicin for 24h\n2. Lysed cells in RIPA buffer with protease inhibitors\n3. Ran 10% SDS-PAGE, transferred to PVDF membrane\n4. Probed with anti-p53 (DO-1) 1:1000, anti-β-actin 1:5000",
-    observations: "Protein loading appeared even across wells. Transfer efficiency confirmed with Ponceau S.",
-    results:
-      "Clear band at 53kDa in treated samples. ~3-fold increase vs untreated control after normalization to β-actin.",
-    conclusion: "Hypothesis confirmed. p53 is upregulated by doxorubicin treatment in MCF-7.",
-    experimentDate: "2026-04-20",
-    createdAt: "4 days ago",
-  },
-];
+
 
 const emptyEntry = {
   title: "",
@@ -114,7 +78,42 @@ export default function NotebookPage() {
   const [isProcessingVoice, setIsProcessingVoice] = useState(false);
   const [showNewEntry, setShowNewEntry] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [entries, setEntries] = useState<NotebookEntry[]>(initialEntries);
+  const [entries, setEntries] = useState<NotebookEntry[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // ── Fetch entries from DB on mount ──
+  useEffect(() => {
+    async function fetchEntries() {
+      try {
+        const res = await fetch("/api/entries");
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        const mapped: NotebookEntry[] = (data.entries || []).map(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (e: any) => ({
+            id: e.id,
+            title: e.title,
+            source: e.source || "typed",
+            tags: e.tags || [],
+            hypothesis: e.hypothesis || "",
+            materials: e.materials || "",
+            procedure: e.procedure || "",
+            observations: e.observations || "",
+            results: e.results || "",
+            conclusion: e.conclusion || "",
+            experimentDate: e.createdAt?.split("T")[0] || "",
+            createdAt: e.createdAt,
+          })
+        );
+        setEntries(mapped);
+      } catch {
+        // silently fail — user sees empty state
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    fetchEntries();
+  }, []);
   const [searchQuery, setSearchQuery] = useState("");
   const [newEntry, setNewEntry] = useState(emptyEntry);
   const [entrySource, setEntrySource] = useState<"typed" | "voice">("typed");
@@ -242,36 +241,58 @@ export default function NotebookPage() {
     setIsSaving(true);
 
     try {
-      // Build the new entry object
-      const now = new Date();
+      const tags = newEntry.tags
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+
+      // Save to database
+      const res = await fetch("/api/entries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: newEntry.title.trim(),
+          source: entrySource,
+          tags,
+          hypothesis: newEntry.hypothesis.trim() || null,
+          materials: newEntry.materials.trim() || null,
+          procedure: newEntry.procedure.trim() || null,
+          observations: newEntry.observations.trim() || null,
+          results: newEntry.results.trim() || null,
+          conclusion: newEntry.conclusion.trim() || null,
+          rawVoiceText: rawVoiceText || null,
+        }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Save failed");
+      }
+
+      const { entry: savedEntry } = await res.json();
+
       const entry: NotebookEntry = {
-        id: `entry-${Date.now()}`,
-        title: newEntry.title.trim(),
-        source: entrySource,
-        tags: newEntry.tags
-          .split(",")
-          .map((t) => t.trim())
-          .filter(Boolean),
-        hypothesis: newEntry.hypothesis.trim(),
-        materials: newEntry.materials.trim(),
-        procedure: newEntry.procedure.trim(),
-        observations: newEntry.observations.trim(),
-        results: newEntry.results.trim(),
-        conclusion: newEntry.conclusion.trim(),
-        experimentDate: now.toISOString().split("T")[0],
-        createdAt: formatRelativeTime(now),
+        id: savedEntry.id,
+        title: savedEntry.title,
+        source: savedEntry.source || entrySource,
+        tags: savedEntry.tags || tags,
+        hypothesis: savedEntry.hypothesis || "",
+        materials: savedEntry.materials || "",
+        procedure: savedEntry.procedure || "",
+        observations: savedEntry.observations || "",
+        results: savedEntry.results || "",
+        conclusion: savedEntry.conclusion || "",
+        experimentDate: savedEntry.createdAt?.split("T")[0] || "",
+        createdAt: savedEntry.createdAt,
       };
 
-      // Add to top of the entries list
       setEntries((prev) => [entry, ...prev]);
 
-      // Reset form and close dialog
       setNewEntry(emptyEntry);
       setEntrySource("typed");
       setRawVoiceText("");
       setShowNewEntry(false);
 
-      // Show success toast
       toast.success("New entry added!", {
         description: `"${entry.title}" saved to your notebook.`,
       });
@@ -283,9 +304,15 @@ export default function NotebookPage() {
   };
 
   // ── Delete entry handler ──
-  const handleDeleteEntry = (entryId: string) => {
-    setEntries((prev) => prev.filter((e) => e.id !== entryId));
-    toast.success("Entry deleted");
+  const handleDeleteEntry = async (entryId: string) => {
+    try {
+      const res = await fetch(`/api/entries?id=${entryId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error();
+      setEntries((prev) => prev.filter((e) => e.id !== entryId));
+      toast.success("Entry deleted");
+    } catch {
+      toast.error("Failed to delete entry");
+    }
   };
 
   // ── Filter entries by search ──

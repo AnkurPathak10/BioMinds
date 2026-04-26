@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import {
   BookOpen,
@@ -63,6 +63,35 @@ export default function LibraryPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  // ── Fetch papers from DB on mount ──
+  useEffect(() => {
+    async function fetchPapers() {
+      try {
+        const res = await fetch("/api/papers");
+        if (!res.ok) return;
+        const data = await res.json();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const mapped: Paper[] = (data.papers || []).map((p: any) => ({
+          id: p.id,
+          title: p.title,
+          fileName: p.fileName || "",
+          fileSize: p.fileSize || 0,
+          numPages: p.numPages || 0,
+          wordCount: p.wordCount || 0,
+          chunkCount: p.chunkCount || 0,
+          chunks: (p.chunks || []).map((c: { content: string }) => c.content),
+          preview: p.preview || "",
+          status: p.status || "ready",
+          uploadedAt: p.createdAt || "",
+        }));
+        setPapers(mapped);
+      } catch {
+        // silently fail
+      }
+    }
+    fetchPapers();
+  }, []);
+
   // ── Upload PDF handler ──
   const uploadPDF = useCallback(async (file: File) => {
     if (!file.name.toLowerCase().endsWith(".pdf")) {
@@ -109,21 +138,21 @@ export default function LibraryPage() {
         throw new Error(errData.error || `Upload failed: ${response.status}`);
       }
 
-      const data = await response.json();
+      const { paper } = await response.json();
 
-      // Update paper with parsed data
+      // Update paper with DB data
       setPapers((prev) =>
         prev.map((p) =>
           p.id === tempId
             ? {
                 ...p,
-                id: `paper-${Date.now()}`,
-                title: data.title || p.title,
-                numPages: data.numPages,
-                wordCount: data.wordCount,
-                chunkCount: data.chunkCount,
-                chunks: data.chunks || [],
-                preview: data.preview || "",
+                id: paper.id,
+                title: paper.title || p.title,
+                numPages: paper.numPages || 0,
+                wordCount: paper.wordCount || 0,
+                chunkCount: paper.chunkCount || 0,
+                chunks: (paper.chunks || []).map((c: { content: string }) => c.content),
+                preview: paper.preview || "",
                 status: "ready" as const,
               }
             : p
@@ -131,7 +160,7 @@ export default function LibraryPage() {
       );
 
       toast.success("Paper uploaded!", {
-        description: `"${data.title}" — ${data.numPages} pages, ${data.chunkCount} chunks indexed.`,
+        description: `"${paper.title}" — ${paper.numPages} pages, ${paper.chunkCount} chunks indexed.`,
       });
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Upload failed";
@@ -169,9 +198,15 @@ export default function LibraryPage() {
   };
 
   // ── Delete paper ──
-  const deletePaper = (paperId: string) => {
-    setPapers((prev) => prev.filter((p) => p.id !== paperId));
-    toast.success("Paper removed");
+  const deletePaper = async (paperId: string) => {
+    try {
+      const res = await fetch(`/api/papers?id=${paperId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error();
+      setPapers((prev) => prev.filter((p) => p.id !== paperId));
+      toast.success("Paper removed");
+    } catch {
+      toast.error("Failed to remove paper");
+    }
   };
 
   // ── Chat with papers ──

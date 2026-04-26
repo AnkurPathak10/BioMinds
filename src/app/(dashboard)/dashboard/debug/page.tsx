@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { toast } from "sonner";
 import {
   Bug,
@@ -15,6 +15,8 @@ import {
   X,
   TrendingDown,
   RotateCcw,
+  History,
+  Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -42,6 +44,31 @@ export default function DebugPage() {
   const [analysisSteps, setAnalysisSteps] = useState<string[]>([]);
   const [errorMessage, setErrorMessage] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  type PastSession = {
+    id: string;
+    description: string;
+    expectedResult: string | null;
+    imageCount: number;
+    createdAt: string;
+    diagnoses: Diagnosis[];
+  };
+  const [pastSessions, setPastSessions] = useState<PastSession[]>([]);
+
+  // ── Fetch past debug sessions on mount ──
+  useEffect(() => {
+    async function fetchSessions() {
+      try {
+        const res = await fetch("/api/debug-sessions");
+        if (!res.ok) return;
+        const data = await res.json();
+        setPastSessions(data.sessions || []);
+      } catch {
+        // silently fail
+      }
+    }
+    fetchSessions();
+  }, []);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -154,6 +181,28 @@ export default function DebugPage() {
       }
 
       setDiagnoses(diagnosisArray);
+
+      // Save session to DB
+      try {
+        const saveRes = await fetch("/api/debug-sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            description: description.trim(),
+            expectedResult: expectedResult.trim() || null,
+            protocol: protocol.trim() || null,
+            imageCount: images.length,
+            diagnoses: diagnosisArray,
+          }),
+        });
+        if (saveRes.ok) {
+          const { session } = await saveRes.json();
+          setPastSessions((prev) => [session, ...prev]);
+        }
+      } catch {
+        // non-critical: diagnosis was already shown
+      }
+
       toast.success("Diagnosis complete!", {
         description: `Found ${diagnosisArray.length} probable cause${diagnosisArray.length > 1 ? "s" : ""}.`,
       });
@@ -504,6 +553,52 @@ export default function DebugPage() {
           )}
         </div>
       </div>
+      {/* ── Past Sessions History ── */}
+      {pastSessions.length > 0 && (
+        <div className="space-y-4">
+          <Separator />
+          <div className="flex items-center gap-2">
+            <History className="h-5 w-5 text-muted-foreground" />
+            <h2 className="text-lg font-semibold">Past Diagnoses</h2>
+            <Badge variant="secondary" className="ml-1 text-xs">
+              {pastSessions.length}
+            </Badge>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {pastSessions.map((session) => (
+              <Card
+                key={session.id}
+                className="group cursor-pointer transition-all hover:shadow-md hover:border-primary/30"
+                onClick={() => {
+                  setDiagnoses(session.diagnoses);
+                  setDescription(session.description);
+                  setExpectedResult(session.expectedResult || "");
+                }}
+              >
+                <CardContent className="py-4 space-y-2">
+                  <div className="flex items-start justify-between">
+                    <p className="text-sm font-medium line-clamp-2">
+                      {session.description}
+                    </p>
+                    <Badge variant="outline" className="ml-2 shrink-0 text-xs">
+                      {session.diagnoses?.length || 0} causes
+                    </Badge>
+                  </div>
+                  {session.diagnoses?.[0] && (
+                    <p className="text-xs text-muted-foreground line-clamp-1">
+                      Top: {session.diagnoses[0].title}
+                    </p>
+                  )}
+                  <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <Clock className="h-3 w-3" />
+                    {new Date(session.createdAt).toLocaleDateString()}
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
